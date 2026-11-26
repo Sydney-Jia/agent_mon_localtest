@@ -44,6 +44,14 @@ class UsageKeyValueParser:
                 continue
             key, value = [part.strip() for part in line.split(":", 1)]
             normalized = normalize_key(key)
+            if normalized == "hbm_bandwidth_bytes_per_s":
+                sample = parse_hbm_bandwidth(key, value)
+                if sample is None:
+                    device.setdefault("extra", {})[key] = value
+                else:
+                    field, measurement = sample
+                    device[field] = measurement
+                continue
             parsed = parse_number_with_unit(f"{value} {key}")
             if normalized:
                 device[normalized] = parsed
@@ -264,6 +272,25 @@ def normalize_key(key: str) -> str | None:
     if "利用率" in key:
         return "aicore_util_pct"
     return None
+
+
+def parse_hbm_bandwidth(key: str, value: str) -> tuple[str, float] | None:
+    """Accept explicit, consistent units in either the value or the label."""
+    number = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(%|(?:[kKMGT]i?)?B/s)?", value)
+    if number is None:
+        return None
+    units = set(re.findall(r"%|(?<![a-zA-Z])(?:[kKMGT]i?)?B/s\b", key))
+    if number[2]:
+        units.add(number[2])
+    if len(units) != 1:
+        return None
+    unit = units.pop()
+    amount = float(number[1])
+    if unit == "%":
+        return ("hbm_bandwidth_util_pct", amount) if amount <= 100 else None
+    prefix = unit[0].upper() if unit != "B/s" else ""
+    exponent = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4}[prefix]
+    return "hbm_bandwidth_bytes_per_s", amount * (1024 if "i" in unit else 1000) ** exponent
 
 
 def parse_number_with_unit(value: str) -> object:

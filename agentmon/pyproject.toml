@@ -18,6 +18,8 @@ analysis = ["numpy>=1.24", "pandas>=2", "pyarrow>=14", "zstandard>=0.22"]
 
 [project.scripts]
 agentmon = "agentmon.cli:main"
+agentmon-capture = "agentmon.capture_cli:main"
+agentmon-report = "agentmon.report_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -25,6 +27,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 agentmon = [
   "py.typed",
+  "adapters/inference/vllm_030/bindings.json",
   "analysis/schemas/*.yaml",
   "analysis/profiles/*.yaml",
   "experiments/mechanisms/*.toml",

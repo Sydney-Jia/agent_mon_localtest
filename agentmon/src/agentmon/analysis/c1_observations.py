@@ -88,7 +88,9 @@ def process_epoch_stable(rows, expected_pids):
     return all(before.get(pid) is not None and before.get(pid) == after.get(pid) for pid in expected_pids)
 
 
-def summarize(rows, request, *, epoch_stable, disk_device):
+def summarize(rows, request, *, epoch_stable, disk_device, expected_request_count=1):
+    if type(expected_request_count) is not int or expected_request_count < 1:
+        raise ValueError('expected_request_count must be a positive integer')
     classified = [dict(r, window=classify(r, request)) for r in rows]
     coverage = {}
     for source in ("npu", "host", "process", "disk", "metrics"):
@@ -161,12 +163,13 @@ def summarize(rows, request, *, epoch_stable, disk_device):
                         or ((r.get("data") or {}).get("vllm:num_requests_waiting", 0) or 0) > 0
                         for r in classified if r["source"] == "metrics" and r["window"] == "pre")
     success_delta = deltas["request_success_total"]["delta"]
-    other_traffic = other_traffic or (success_delta is not None and success_delta > 1)
+    other_traffic = other_traffic or (success_delta is not None and success_delta > expected_request_count)
     result = {"request": request, "coverage": coverage, "hbm": hbm, "host": host, "processes": process,
               "disk": disk, "metric_deltas": deltas, "epoch_stable": epoch_stable,
               "missing_full_phase_coverage": missing, "other_traffic_indicator": other_traffic,
               "attribution": "ENGINE_DEVICE_PROCESS_WINDOW_ONLY", "kv_physical_allocation": "NOT_OBSERVED",
               "offload_events": "NOT_OBSERVED", "runtime_loaded_modules": "UNRESOLVED"}
+    result['expected_request_count'] = expected_request_count
     result['cache_config_info'] = {'before': m0.get('_cache_config_info'), 'after': m1.get('_cache_config_info'),
                                     'scope': 'ENGINE_CONFIG_LABELS', 'block_semantics': 'UNRESOLVED'}
     result["kv_gauge_timeline"] = [{"utc":r["utc"],"window":r["window"],"started_ns":r["started_ns"],"ended_ns":r["ended_ns"],

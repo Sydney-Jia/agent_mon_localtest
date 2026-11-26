@@ -1,3 +1,8 @@
-from __future__ import annotations
+"""Compatibility namespace for mini-SWE-agent integrations."""
+from agentmon.adapters.agent_frameworks import mini_swe as _impl
 
-from agentmon.adapters.agent_frameworks.mini_swe import *  # noqa: F403
+__all__ = _impl.__all__
+
+
+def __getattr__(name):
+    return getattr(_impl, name)

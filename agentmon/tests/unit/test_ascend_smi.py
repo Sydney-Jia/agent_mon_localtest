@@ -4,6 +4,23 @@ from agentmon.sampling.ascend_smi import parse_npu_smi_text
 
 
 class AscendSmiTests(unittest.TestCase):
+    def test_bandwidth_has_a_proven_dimension(self) -> None:
+        for label, value, expected in (
+            ("HBM Bandwidth Usage Rate", "83 %", {"hbm_bandwidth_util_pct": 83}),
+            ("HBM Bandwidth Usage Rate (%)", "0", {"hbm_bandwidth_util_pct": 0}),
+            ("HBM Bandwidth", "2 GB/s", {"hbm_bandwidth_bytes_per_s": 2_000_000_000}),
+            ("HBM Bandwidth (GiB/s)", "2", {"hbm_bandwidth_bytes_per_s": 2 * 1024**3}),
+            ("HBM Bandwidth", "83", {}),
+            ("HBM Bandwidth (%)", "2 GB/s", {}),
+            ("HBM Bandwidth", "2 Gb/s", {}),
+            ("HBM Bandwidth", "N/A", {}),
+        ):
+            with self.subTest(label=label, value=value):
+                row = parse_npu_smi_text(f"Aicore Usage Rate: 2 %\n{label}: {value}").devices[0]
+                self.assertEqual({k: v for k, v in row.items() if k.startswith("hbm_bandwidth")}, expected)
+                if not expected:
+                    self.assertEqual(row["extra"][label], value)
+
     def test_key_value_parser_normalizes_usage_fields(self) -> None:
         text = """
 Memory Capacity(MB) : 65536

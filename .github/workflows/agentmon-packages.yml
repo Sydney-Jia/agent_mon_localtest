@@ -1,0 +1,40 @@
+name: AgentMon collection packages
+on:
+  push:
+    paths: ['agentmon/**', '.github/workflows/agentmon-packages.yml']
+  pull_request:
+    paths: ['agentmon/**', '.github/workflows/agentmon-packages.yml']
+permissions:
+  contents: read
+jobs:
+  collection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest
+      - name: Test collection, split installation boundaries and private file permissions
+        run: >
+          python -m pytest -q agentmon/tests/unit/test_distribution_split.py
+          agentmon/tests/unit/test_v030_filesystem_tier.py agentmon/tests/unit/test_ascend_smi.py
+          agentmon/tests/unit/test_host_sampling.py agentmon/tests/unit/test_prometheus.py
+          agentmon/tests/unit/test_events.py agentmon/tests/unit/test_jsonl.py
+      - name: Install and run the online ZIP in isolation
+        run: |
+          python agentmon/packages/build.py --out "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release"
+          sha256sum -c SHA256SUMS
+          python -m pip install ./agentmon-online.zip
+          agentmon-capture run --output-root "$RUNNER_TEMP/runs" -- python -c 'print("collection smoke")'
+          python -m pip install ./agentmon-offline.zip
+          agentmon-report "$RUNNER_TEMP"/runs/*
+          python -m pip install ./agentmon-experiments.zip
+          agentmon --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentmon-packages
+          path: ${{ runner.temp }}/release/

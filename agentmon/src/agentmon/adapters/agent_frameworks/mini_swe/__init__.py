@@ -14,12 +14,16 @@ from .environment import (
 )
 from .model import InstrumentedLitellmModel, InstrumentedModel
 from .context_compression import MiniSweContextCompressor
-from .runtime_control import (
-    RuntimeControlledLocalEnvironment,
-    RuntimeControlledModel,
-    RuntimeControlledToolResult,
-    RuntimeControlRejected,
-)
+
+
+# Runtime controls are provided by the optional experiment distribution.
+def __getattr__(name):
+    if name in {"RuntimeControlledLocalEnvironment", "RuntimeControlledModel",
+                "RuntimeControlledToolResult", "RuntimeControlRejected"}:
+        from . import runtime_control
+        return getattr(runtime_control, name)
+    raise AttributeError(name)
+
 
 __all__ = [
     "InstrumentedAgentMixin",

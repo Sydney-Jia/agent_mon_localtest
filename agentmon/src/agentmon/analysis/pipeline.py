@@ -25,8 +25,6 @@ from agentmon.analysis.resume import build_analysis_manifest, config_fingerprint
 from agentmon.analysis.semantics import write_semantics_bundle
 from agentmon.analysis.validators import validate_analysis_bundle
 from agentmon.config import AgentMonConfig
-from agentmon.optimizer.harness.runner import run_optimizer_experiment_harness
-from agentmon.optimizer.registry import optimizer_strategy_catalog
 
 
 def prepare_analysis_bundle(
@@ -1115,6 +1113,9 @@ def build_optimizer_harness_stage_bundle(bundle: Path, discovery: DiscoveryResul
             "optimizer_harness",
             "no_batch_artifacts_discovered",
         )
+    from agentmon.optimizer.registry import optimizer_strategy_catalog
+    from agentmon.optimizer.harness.runner import run_optimizer_experiment_harness
+
     strategies = [
         str(row["name"])
         for row in optimizer_strategy_catalog()

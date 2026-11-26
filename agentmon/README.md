@@ -1,4 +1,32 @@
-# AgentMon Ascend
+# AgentMon 成员使用入口
+
+采集端可以只装在线包。三种交付沿用同一套 Python 导入路径，每个源码文件只有一个归属。
+
+| 交付 | 什么时候装 | 入口 |
+|---|---|---|
+| **online** | 运行 Coding Agent；在匹配版本的 Engine 上启用 Hook；写事件和硬件样本 | `agentmon-capture`、[Hook 工作原理](docs/HOOKS.md) |
+| **offline** | 在分析机读取一次运行的事件，生成报告或核验队列和查询 | `agentmon-report <运行目录>`，与 online 一起安装 |
+| **experiments** | 需要进程编排、优化器实验或完整历史 CLI | `agentmon --help`，与前两包一起安装 |
+
+从仓库根目录构建（Python 3.10+）。选择新的或空的输出目录。例子中的 /tmp 路径可自行替换。
+
+```bash
+python agentmon/packages/build.py --out /tmp/agentmon-dist
+cd /tmp/agentmon-dist
+sha256sum -c SHA256SUMS
+python -m pip install ./agentmon-online.zip
+agentmon-capture run -- python -c 'print("hello")'
+# 分析或编排机按需要增装
+python -m pip install ./agentmon-offline.zip
+python -m pip install ./agentmon-experiments.zip
+```
+
+`src/agentmon/adapters/` 保存 Agent 与 Engine Hook 的实现，`hooks/v030/` 是显式启用的文件后端启动入口。`src/agentmon/{sampling,storage,kv_evidence}/` 负责采样、落盘与证据身份。离线实现位于 `analysis/`、`reporting/` 等模块，编排实现位于 `experiments/`、`runtime/` 等模块。`packages/` 定义发布边界与专用工具。ZIP 只从选定的源码、资源和说明生成。
+
+原有整库安装 `pip install ./agentmon` 继续提供完整 CLI。请在不同虚拟环境中使用整库安装和拆分安装，确保同一模块只有一个安装来源。测试采用的上游文件与许可证见 [第三方说明](THIRD_PARTY.md)。
+
+## 完整安装的历史入口
+
 
 AgentMon Ascend is a staged monitor for mini-SWE-agent, LiteLLM, vLLM-Ascend,
 and Ascend NPU runs. It includes the P0 no-intrusion monitor, the P1 mini-SWE

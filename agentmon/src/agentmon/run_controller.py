@@ -14,7 +14,7 @@ from agentmon.clock import ClockAnchor, host_boot_id, monotonic_clock_domain, so
 from agentmon.config import AgentMonConfig
 from agentmon.events import safe_json_dumps
 from agentmon.paths import make_private_dir, open_private_text, output_root, write_private_text
-from agentmon.reporting.report import load_events, write_reports
+from agentmon.reporting.event_log import load_events
 from agentmon.runtime.p2_import import (
     P2RunWindow,
     import_p2_run_window,
@@ -203,6 +203,7 @@ class RunController:
         self.manifest["data_quality"] = infer_data_quality(load_events(self.run_dir))
         self._write_manifest()
         if self.write_final_report:
+            from agentmon.reporting.report import write_reports
             write_reports(self.run_dir)
         return exit_code
 
