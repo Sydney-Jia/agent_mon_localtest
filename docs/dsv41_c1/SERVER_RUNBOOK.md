@@ -165,3 +165,17 @@ cat "$LIVE/metric_deltas.json"
 本轮即使看到SSD读取增加、RSS或HBM变化，也不证明权重/KV迁移。下一阶段先关联API/外部请求、内部request_id、Engine执行实例，再记录Scheduler→KVCacheManager→Coordinator→BlockPool生命周期，最后验证Layer/Rank上的真实backing allocation。
 
 128/32差异必须用当前定制构建的KV group/layout解释，不能直接使用`num_gpu_blocks×32`或×128换算HBM字节。Hook方案提交后再单独决定如何部署；本入口不会注入或重启。
+
+## 8. 对比多 DP 副本的指标快照
+
+对正在服务的其他配置，使用同一个模型实例在请求前后各保存一份 `/metrics`，等请求结束且统计刷新后再保存后者。离线比较工具可以直接读取这些文件：
+
+```bash
+python agentmon/scripts/dsv41_metrics_review.py \
+  --model deepseek-v41-flash --before before.prom --metrics after.prom \
+  --provenance "single controlled request" --output-dir outputs/kv-window
+```
+
+报告 `metrics_window.json` 以 engine 标签分开输出查询和命中的前缀 token 差分、有缓存的输入 token、已结束请求数、平均 Prefill 时延和瞬时 KV 使用率。默认比较两个快照中出现的所有副本，也可以用 `--engine` 指定一个。已结束请求数按各结束原因分别计算差分再相加。
+
+两份快照只提供服务端的窗口证据。计数缺失、回退、导出的创建时间变化或命中差分大于查询差分时，相关结果留空。快照仍需来自同一个进程代际。没有查询的窗口不产生命中率。若要把差分归到某次请求，控制客户端并发、核对对应副本的请求数和输入 token 数，并保留客户端的 TTFT。默认的单快照调用仍输出 `metrics_review.json`。

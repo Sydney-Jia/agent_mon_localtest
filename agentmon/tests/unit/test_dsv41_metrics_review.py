@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentmon.analysis.kv_metrics_review import review_metrics
+from agentmon.analysis.kv_metrics_review import review_metrics, review_window
 from agentmon.adapters.inference.vllm_018.version import is_supported_vllm_version
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,6 +87,72 @@ def test_offline_cli_preserves_bytes_unknown_time_and_refuses_overwrite(tmp_path
     assert json.loads((out / "metrics_review.json").read_text())["provenance"]["collected_at_utc"] == "UNKNOWN"
     with pytest.raises(FileExistsError):
         module.main(args)
+
+
+def window_sample(queries, hits, stop, length, *, engine=0, created=1, model="ds"):
+    labels = f'engine="{engine}",model_name="{model}"'
+    return "\n".join((
+        f"vllm:prefix_cache_queries_total{{{labels}}} {queries}",
+        f"vllm:prefix_cache_queries_created{{{labels}}} {created}",
+        f"vllm:prefix_cache_hits_total{{{labels}}} {hits}",
+        f'vllm:request_success_total{{{labels},finished_reason="stop"}} {stop}',
+        f'vllm:request_success_total{{{labels},finished_reason="length"}} {length}',
+        f"vllm:request_prefill_time_seconds_count{{{labels}}} {stop + length}",
+        f"vllm:request_prefill_time_seconds_sum{{{labels}}} {(stop + length) / 2}",
+        f'vllm:num_requests_waiting{{{labels},reason="capacity"}} 20',
+        f"vllm:num_requests_waiting{{{labels}}} 0",
+        "",
+    ))
+
+
+def test_window_keeps_engines_separate_and_sums_completion_deltas():
+    before = window_sample(100, 20, 1, 2) + window_sample(100, 0, 1, 1, engine=1)
+    after = window_sample(200, 90, 2, 3) + window_sample(100, 0, 1, 1, engine=1)
+    after += window_sample(15, 2, 3, 2, model="unrelated", engine=2)
+    result = review_window(before, after, model="ds")
+    assert result["status"] == "VERIFIED"
+    assert result["request_binding"] == "NOT_CAPTURED"
+    active, idle = result["engines"]["0"], result["engines"]["1"]
+    assert set(result["engines"]) == {"0", "1"}
+    assert active["counters"]["request_success_total"]["delta"] == 2
+    assert active["prefix_counter_ratio"] == 0.7
+    assert active["mean_prefill_seconds"] == 0.5
+    assert idle["prefix_counter_ratio"] is None
+    assert active["gauges"]["num_requests_waiting"] == {"before": 0, "after": 0}
+
+
+def test_window_rejects_reset_even_when_other_completion_series_grows():
+    before = window_sample(100, 20, 1, 2)
+    after = window_sample(200, 90, 4, 1, created=2)
+    result = review_window(before, after, model="ds")
+    assert result["status"] == "PARTIAL"
+    counters = result["engines"]["0"]["counters"]
+    assert counters["prefix_cache_queries_total"]["reason"] == "counter_epoch_changed_or_invalid"
+    assert counters["request_success_total"]["reason"] == "invalid_counter_or_reset"
+
+
+def test_window_handles_duplicates_missing_engines_and_invalid_ratio():
+    snapshot = window_sample(100, 20, 1, 2)
+    assert review_window(snapshot, snapshot + snapshot, model="ds")["status"] == "PARTIAL"
+    assert review_window(snapshot, snapshot, model="ds", engine="1")["status"] == "PARTIAL"
+    result = review_window(snapshot, window_sample(110, 40, 2, 2), model="ds")
+    assert result["status"] == "PARTIAL"
+    assert result["engines"]["0"]["prefix_counter_ratio"] is None
+
+
+def test_window_cli_copies_both_snapshots_and_accepts_explicit_engine(tmp_path):
+    before, after = tmp_path / "pre.prom", tmp_path / "post.prom"
+    before.write_text(window_sample(100, 20, 1, 2, engine=1), encoding="utf-8")
+    after.write_text(window_sample(200, 90, 2, 2, engine=1), encoding="utf-8")
+    out = tmp_path / "review"
+    assert script("dsv41_metrics_review").main([
+        "--before", str(before), "--metrics", str(after), "--output-dir", str(out),
+        "--provenance", "fixture", "--engine", "1", "--model", "ds",
+    ]) == 0
+    report = json.loads((out / "metrics_window.json").read_text(encoding="utf-8"))
+    assert set(report["engines"]) == {"1"}
+    assert (out / "before.prom").read_bytes() == before.read_bytes()
+    assert (out / "metrics.prom").read_bytes() == after.read_bytes()
 
 
 def test_source_ast_does_not_import_or_execute_target(tmp_path):
