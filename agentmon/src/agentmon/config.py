@@ -51,6 +51,7 @@ class VllmConfig:
     interval_seconds: float = 1.0
     request_timeout_seconds: float = 2.0
     prefix_caching: str = "unknown"
+    dp_affinity_size: int = 0
 
 
 @dataclass
@@ -421,6 +422,8 @@ def validate_config(cfg: AgentMonConfig) -> None:
 
     if cfg.vllm.prefix_caching not in {"enabled", "disabled", "unknown"}:
         raise ConfigError("vllm.prefix_caching must be enabled, disabled, or unknown")
+    if type(cfg.vllm.dp_affinity_size) is not int or cfg.vllm.dp_affinity_size < 0:
+        raise ConfigError("vllm.dp_affinity_size must be a non-negative integer")
 
     for name, url in (
         ("vllm.metrics_url", cfg.vllm.metrics_url),

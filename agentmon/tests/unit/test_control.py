@@ -5,7 +5,8 @@ import sys
 import threading
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from copy import deepcopy
 from pathlib import Path
 
 from agentmon.cli import main as agentmon_main
@@ -268,10 +269,12 @@ class ControlCliTests(unittest.TestCase):
             received_path = ""
             received_body = {}
             received_request_id = ""
+            received_rank = ""
 
             def do_POST(self) -> None:
                 type(self).received_path = self.path
                 type(self).received_request_id = self.headers.get("X-AgentMon-Request-Id", "")
+                type(self).received_rank = self.headers.get("X-data-parallel-rank", "")
                 length = int(self.headers.get("Content-Length", "0"))
                 type(self).received_body = json.loads(self.rfile.read(length).decode("utf-8"))
                 raw = json.dumps({"id": "cmpl-test", "choices": []}).encode("utf-8")
@@ -290,13 +293,96 @@ class ControlCliTests(unittest.TestCase):
         try:
             api_base = f"http://127.0.0.1:{server.server_port}/v1"
             with tempfile.TemporaryDirectory() as tmp:
-                cfg = load_config(
-                    config_path=write_control_config(Path(tmp), max_running_runs=4, api_base=api_base)
-                )
+                config = write_control_config(Path(tmp), max_running_runs=4, api_base=api_base)
+                cfg = load_config(config_path=config)
                 provider = GatedOpenAICompatibleProvider(cfg)
                 payload = {"model": "local", "messages": [{"role": "user", "content": "hi"}]}
 
-                result = provider.chat_completions(payload, request_id="req-test")
+                provider.chat_completions(payload, request_id="req-test")
+                self.assertEqual(Handler.received_body, payload)
+                self.assertEqual(Handler.received_rank, "")
+
+                cfg.vllm.dp_affinity_size = 2
+                params = {
+                    "type": "object",
+                    "required": ["z", "a"],
+                    "properties": {"z": {"type": "boolean", "default": False}, "a": {}},
+                }
+                payload["tools"] = [
+                    {"type": "function", "function": {"name": "z", "strict": False, "parameters": params}},
+                    {"type": "function", "function": {"name": "a"}},
+                    {"type": "custom", "name": "other"},
+                ]
+                result = provider.chat_completions(payload, request_id="req-test", session_id="session-a")
+                rank = Handler.received_rank
+                first_wire = json.dumps(Handler.received_body)
+                self.assertEqual(first_wire, json.dumps(payload))
+                self.assertIn(rank, {"0", "1"})
+
+                # Keep only the first turn's tool catalog for later requests.
+                reference = {"tools": deepcopy(payload["tools"])}
+                reordered = deepcopy(payload)
+                reordered["messages"][0]["content"] = "hi again"
+                reordered["tools"][0]["function"]["parameters"] = {
+                    "properties": {"a": {}, "z": {"default": False, "type": "boolean"}},
+                    "required": ["z", "a"],
+                    "type": "object",
+                }
+                reordered_wire = json.dumps(reordered)
+                reference_wire = json.dumps(reference)
+                expected = {**reordered, "tools": payload["tools"]}
+                provider.chat_completions(
+                    reordered, request_id="req-test", session_id="session-a", tool_schema_reference=reference
+                )
+                self.assertEqual(json.dumps(Handler.received_body), json.dumps(expected))
+                self.assertEqual(Handler.received_rank, rank)
+                self.assertEqual(json.dumps(reordered), reordered_wire)
+                self.assertEqual(json.dumps(reference), reference_wire)
+
+                for change in ("strict_missing", "strict_value", "required_order", "default_type", "tool_order"):
+                    with self.subTest(change=change):
+                        changed = deepcopy(reordered)
+                        function = changed["tools"][0]["function"]
+                        if change == "strict_missing":
+                            del function["strict"]
+                        elif change == "strict_value":
+                            function["strict"] = True
+                        elif change == "required_order":
+                            function["parameters"]["required"].reverse()
+                        elif change == "default_type":
+                            function["parameters"]["properties"]["z"]["default"] = 0
+                        elif change == "tool_order":
+                            changed["tools"].reverse()
+                        provider.chat_completions(
+                            changed, request_id="req-test", session_id="session-a", tool_schema_reference=reference
+                        )
+                        self.assertEqual(json.dumps(Handler.received_body), json.dumps(changed))
+
+                provider.chat_completions(
+                    reordered,
+                    request_id="req-test",
+                    tool_schema_reference={**reference, "model": "another-model"},
+                )
+                self.assertEqual(json.dumps(Handler.received_body), reordered_wire)
+
+                current_path = Path(tmp) / "request.json"
+                current_path.write_text(reordered_wire, encoding="utf-8")
+                reference_path = Path(tmp) / "first-tools.json"
+                reference_path.write_text(reference_wire, encoding="utf-8")
+                cli_args = [
+                    "control", "model-gate", "chat-completions", "--config", str(config),
+                    "--payload", str(current_path), "--request-id", "req-test",
+                ]
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(agentmon_main(cli_args), 0)
+                    self.assertEqual(json.dumps(Handler.received_body), reordered_wire)
+                    self.assertEqual(agentmon_main(cli_args + ["--tool-schema-reference", str(reference_path)]), 0)
+                self.assertEqual(json.dumps(Handler.received_body), json.dumps(expected))
+                reference_path.write_text("{}", encoding="utf-8")
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    self.assertEqual(agentmon_main(cli_args + ["--tool-schema-reference", str(reference_path)]), 2)
+                self.assertIn("containing a tools array", stderr.getvalue())
         finally:
             server.shutdown()
             server.server_close()
@@ -306,8 +392,9 @@ class ControlCliTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["id"], "cmpl-test")
         self.assertEqual(Handler.received_path, "/v1/chat/completions")
-        self.assertEqual(Handler.received_body, payload)
         self.assertEqual(Handler.received_request_id, "req-test")
+        self.assertNotIn("session_id", Handler.received_body)
+        self.assertNotIn("tool_schema_reference", Handler.received_body)
 
 
 def write_control_config(
@@ -323,7 +410,7 @@ def write_control_config(
     config.write_text(
         f"""
 [general]
-output_root = "{runs}"
+output_root = "{runs.as_posix()}"
 
 [vllm]
 metrics_url = "http://127.0.0.1:1/metrics"
@@ -332,7 +419,7 @@ models_url = "http://127.0.0.1:1/v1/models"
 request_timeout_seconds = 0.05
 
 [ascend]
-npu_smi = "{root / "missing-npu-smi"}"
+npu_smi = "{(root / "missing-npu-smi").as_posix()}"
 command_timeout_seconds = 0.05
 
 [scheduler]
