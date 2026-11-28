@@ -241,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_config_args(model_gate_chat)
     model_gate_chat.add_argument("--payload", required=True, help="JSON request body file")
     model_gate_chat.add_argument("--request-id", help="optional request id for the lease")
+    model_gate_chat.add_argument("--session-id", help="stable session id for optional vLLM DP affinity")
+    model_gate_chat.add_argument(
+        "--tool-schema-reference",
+        type=Path,
+        help="JSON file containing the first request's tools in the same session",
+    )
     model_gate_chat.add_argument("--current-inflight", type=int, help="override current inflight request count")
     tool_pool = control_subparsers.add_parser("tool-pool", help="inspect tool pool status")
     tool_pool_subparsers = tool_pool.add_subparsers(dest="tool_pool_command")
@@ -767,12 +773,21 @@ def _control(args: argparse.Namespace) -> int:
             payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")
+            tool_schema_reference = None
+            if args.tool_schema_reference is not None:
+                tool_schema_reference = json.loads(args.tool_schema_reference.read_text(encoding="utf-8"))
+                if not isinstance(tool_schema_reference, dict) or not isinstance(
+                    tool_schema_reference.get("tools"), list
+                ):
+                    raise ValueError("tool schema reference must be a JSON object containing a tools array")
             decision = OptimizerService(cfg).decision()
             result = GatedOpenAICompatibleProvider(cfg).chat_completions(
                 payload,
                 decision=decision,
                 request_id=args.request_id,
                 current_inflight_requests=args.current_inflight,
+                session_id=args.session_id,
+                tool_schema_reference=tool_schema_reference,
             )
         except Exception as exc:
             print(f"agentmon control model-gate chat-completions error: {exc}", file=sys.stderr)

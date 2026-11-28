@@ -65,6 +65,37 @@ formulas to unknown V4.1 state types. `prefix_caching=unknown` intentionally
 does not assert a serving feature. bf16 compute dtype is not W4 weight storage
 or a claim about cache dtype. No model path is required on the Mac.
 
+## Optional prefix reuse
+
+For a vLLM endpoint that routes the `X-data-parallel-rank` header, set
+`[vllm].dp_affinity_size` to its actual DP replica count. The default `0`
+leaves routing to vLLM. Use stable session IDs across turns and keep the same
+replica count for the lifetime of the session. The session is hashed client-side.
+A rank header explicitly supplied by a caller takes precedence.
+
+`ProfiledLitellmModel` uses the attached AgentMon run and agent IDs unless the
+caller provides `agentmon_session_id`. The HTTP provider accepts an explicit
+`session_id`, exposed by `agentmon control model-gate chat-completions --session-id`.
+Unidentified requests follow normal routing. Affinity still depends on capacity
+at the selected replica and can concentrate load when a few sessions dominate.
+
+The HTTP provider can reuse the first request's `function.parameters` key order
+on later turns. Save that request's tools in a JSON file containing `{"tools": [...]}`
+and keep one reference per session. A full request file also works. If it includes
+`model`, use the reference with the same model. Requests without a reference
+are sent in their original order.
+
+```bash
+agentmon control model-gate chat-completions --config agentmon.toml \
+  --payload current-request.json --tool-schema-reference first-tools.json
+```
+
+For Python callers, pass `tool_schema_reference` to `GatedOpenAICompatibleProvider.chat_completions`.
+The provider reuses the original parameter key order only if both ordered tool
+lists have the same fields and values. Tool order, array order, `strict` values
+and absent fields all count toward that comparison. If any of these changes,
+the current catalog is sent as supplied.
+
 ## Run from the joint bundle
 
 Extract into a new directory; do not overwrite your existing installation.

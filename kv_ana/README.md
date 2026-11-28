@@ -17,6 +17,10 @@ Configuration files in `configs/` use JSON syntax, which is valid YAML and can b
 
 See `docs/algorithm_specs.md`, `docs/server_adapter_contract.md`, and `docs/experiment_output_schema.md` for the research and integration contracts.
 
+## Observe native vLLM KV cache events
+
+The optional [KV events collector](docs/vllm_kv_events.md) records block stores and removals by DP rank and cache group. It uses the vLLM event publisher and writes a local JSONL capture for offline analysis.
+
 ## Heterogeneous-state research extension
 
 `state_research/` is a separate CPU-only extension; it does not change the frozen

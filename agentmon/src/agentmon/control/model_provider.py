@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-from typing import Any
+from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+from agentmon.adapters.inference.prefix_reuse import affinity_headers, stabilize_tool_parameters
 from agentmon.config import AgentMonConfig
 from agentmon.optimizer.types import OptimizerDecision
 from agentmon.runtime.audit import RuntimeAuditLog
@@ -47,6 +48,8 @@ class GatedOpenAICompatibleProvider:
         decision: OptimizerDecision | None = None,
         request_id: str | None = None,
         current_inflight_requests: int | None = None,
+        session_id: str | None = None,
+        tool_schema_reference: Mapping[str, Any] | None = None,
     ) -> ModelProviderResult:
         lease = self.gate.try_acquire(
             decision,
@@ -67,7 +70,9 @@ class GatedOpenAICompatibleProvider:
             )
             return result
         try:
-            status_code, body = self._post_json("chat/completions", payload, lease.request_id)
+            if tool_schema_reference is not None:
+                payload = stabilize_tool_parameters(payload, tool_schema_reference)
+            status_code, body = self._post_json("chat/completions", payload, lease.request_id, session_id)
             result = ModelProviderResult(
                 accepted=True,
                 lease=lease,
@@ -117,20 +122,23 @@ class GatedOpenAICompatibleProvider:
             if current_inflight_requests is None:
                 self.gate.release(lease.request_id)
 
-    def _post_json(self, endpoint: str, payload: dict[str, Any], request_id: str) -> tuple[int, Any]:
+    def _post_json(
+        self, endpoint: str, payload: dict[str, Any], request_id: str, session_id: str | None
+    ) -> tuple[int, Any]:
         base = self.cfg.vllm.api_base.rstrip("/") + "/"
         url = urljoin(base, endpoint)
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "agentmon/0.1",
+            "X-AgentMon-Request-Id": request_id,
+        }
         request = Request(
             url,
             data=raw,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "agentmon/0.1",
-                "X-AgentMon-Request-Id": request_id,
-            },
+            headers=affinity_headers(headers, session_id, self.cfg.vllm.dp_affinity_size),
         )
         with urlopen(request, timeout=self.cfg.vllm.request_timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
